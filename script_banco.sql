@@ -1,3 +1,8 @@
+-- ====================================================================
+-- SISTEMA KANBAN DE LEITURAS UNB
+-- ====================================================================
+
+-- 1. CRIAÇÃO DAS TABELAS (DDL)
 CREATE TABLE aluno (
     id_aluno SERIAL PRIMARY KEY,
     nome VARCHAR(100) NOT NULL,
@@ -77,3 +82,76 @@ CREATE TABLE historico_movimentacao (
     data_hora_movimentacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     id_cartao INT REFERENCES cartao_kanban(id_cartao) ON DELETE CASCADE
 );
+
+-- ====================================================================
+-- 2. REGRAS DE NEGÓCIO E AUTOMAÇÃO
+-- ====================================================================
+
+-- View de Leitura
+CREATE OR REPLACE VIEW vw_resumo_kanban AS
+SELECT 
+    c.id_cartao,
+    a.nome AS nome_aluno,
+    q.nome_quadro AS quadro,
+    l.titulo AS livro,
+    c.coluna_status AS status_atual,
+    c.data_limite
+FROM 
+    cartao_kanban c
+JOIN quadro q ON c.id_quadro = q.id_quadro
+JOIN aluno a ON q.id_aluno = a.id_aluno
+JOIN livro l ON c.id_livro = l.id_livro;
+
+-- Procedure de Atualização
+CREATE OR REPLACE PROCEDURE sp_mover_cartao(
+    p_id_cartao INT,
+    p_novo_status VARCHAR
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_novo_status IN ('A FAZER', 'FAZENDO', 'FEITO') THEN
+        UPDATE cartao_kanban
+        SET coluna_status = p_novo_status
+        WHERE id_cartao = p_id_cartao;
+    ELSE
+        RAISE EXCEPTION 'Status inválido. Use A FAZER, FAZENDO ou FEITO.';
+    END IF;
+END;
+$$;
+
+-- Trigger de Histórico (Gatilho)
+CREATE OR REPLACE FUNCTION fn_registrar_historico()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.coluna_status IS DISTINCT FROM NEW.coluna_status THEN
+        INSERT INTO historico_movimentacao (coluna_origem, coluna_destino, id_cartao)
+        VALUES (OLD.coluna_status, NEW.coluna_status, NEW.id_cartao);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_historico_kanban
+AFTER UPDATE ON cartao_kanban
+FOR EACH ROW
+EXECUTE FUNCTION fn_registrar_historico();
+
+-- ====================================================================
+-- 3. DADOS DE TESTE INICIAIS (DML)
+-- ====================================================================
+
+INSERT INTO aluno (nome, matricula, email, senha_hash) 
+VALUES ('Elder Machado', '242012092', 'elder@aluno.unb.br', 'senha123');
+
+INSERT INTO categoria (nome_categoria) VALUES ('Computação');
+
+INSERT INTO livro (titulo, autor, isbn, num_paginas, id_categoria) 
+VALUES ('Sistemas de Banco de Dados', 'Elmasri', '123456789', 700, 1);
+
+INSERT INTO quadro (nome_quadro, id_aluno) VALUES ('Semestre 2026/1', 1);
+
+INSERT INTO raia_swimlane (nome_raia, id_quadro) VALUES ('Prioridade Alta', 1);
+
+INSERT INTO cartao_kanban (coluna_status, data_limite, id_quadro, id_raia, id_livro) 
+VALUES ('A FAZER', '2026-07-01', 1, 1, 1);
